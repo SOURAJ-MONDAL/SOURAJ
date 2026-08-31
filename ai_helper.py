@@ -52,6 +52,71 @@ SEVERE_SPECIALIST_HINT = (
 )
 
 _client = None  # lazily created, reused across calls in this process
+_client_key = None  # the API key the current _client was built with (detects key changes)
+
+# The single most common reason "the AI doesn't reply correctly" in practice
+# is that a call is failing for a specific, diagnosable reason (missing key,
+# bad key, wrong model name, quota) and the app was previously swallowing
+# that reason completely, always showing the same generic fallback line no
+# matter what actually went wrong. _last_error keeps the most recent
+# diagnosis so the sidebar (see get_status()) and the dev running the app can
+# actually see what's happening instead of guessing.
+_last_error: Optional[str] = None
+
+
+def _classify_error(exc: Exception) -> str:
+    """Turn a raw SDK/network exception into a short, actionable diagnosis
+    matching the failure modes called out in the build guide's
+    'Common Errors and Fixes' section."""
+    text = str(exc)
+    lowered = text.lower()
+    if "429" in text or "resource_exhausted" in lowered or "quota" in lowered:
+        return "Gemini quota exceeded (429) — wait a bit, or switch FLASH_MODEL/PRO_MODEL to a lighter model."
+    if "404" in text or "not_found" in lowered or "not found" in lowered:
+        return f"Model not found (404) for one of {FLASH_MODEL!r}/{PRO_MODEL!r} — check the exact model name."
+    if "api key not valid" in lowered or "api_key_invalid" in lowered or "400" in text:
+        return "Gemini API key was rejected — get a fresh key from ai.google.dev and update secrets.toml."
+    if "403" in text or "permission_denied" in lowered:
+        return "Gemini API key doesn't have permission for this model/request."
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return "The 'google-genai' package isn't installed — run: pip install google-genai"
+    # Fall back to the raw message, trimmed so it stays readable in the UI.
+    return text[:200] if text else exc.__class__.__name__
+
+
+def _record_error(exc: Exception) -> str:
+    global _last_error
+    _last_error = _classify_error(exc)
+    return _last_error
+
+
+def get_status() -> dict:
+    """Best-effort connection status for the sidebar / debugging.
+
+    Returns: {"connected": bool, "detail": str}
+    "connected" only reflects that a key is configured and the SDK package
+    imports — it is NOT a guarantee the key is valid (we don't want to burn
+    an API call just to render the sidebar). Any real call failure updates
+    "detail" via _record_error() so the actual error shows up here on the
+    next render.
+    """
+    if not get_api_key():
+        return {"connected": False, "detail": "No Gemini API key found. Add GOOGLE_API_KEY to "
+                                                ".streamlit/secrets.toml (or set it in the sidebar)."}
+    try:
+        import google.genai  # noqa: F401
+    except Exception as exc:
+        return {"connected": False, "detail": _classify_error(exc)}
+    if _last_error:
+        return {"connected": False, "detail": _last_error}
+    return {"connected": True, "detail": "AI Connected"}
+
+
+def clear_last_error() -> None:
+    """Call after a successful generation so a one-off transient error
+    doesn't keep showing as the status forever."""
+    global _last_error
+    _last_error = None
 
 
 def _client_ready() -> bool:
@@ -61,17 +126,21 @@ def _client_ready() -> bool:
 def _get_client():
     """Lazy singleton google-genai client so the rest of the app still loads
     even if the package isn't installed yet (until `pip install google-genai`
-    has been run)."""
-    global _client
-    if _client is None:
+    has been run). Rebuilds the client if the configured key changes (e.g.
+    the user pastes a new one into the sidebar mid-session)."""
+    global _client, _client_key
+    key = get_api_key()
+    if _client is None or _client_key != key:
         from google import genai
-        _client = genai.Client(api_key=get_api_key())
+        _client = genai.Client(api_key=key)
+        _client_key = key
     return _client
 
 
 def _generate(model: str, prompt: str, *, json_mode: bool = False, thinking_level: str = "low") -> str:
     """Shared call wrapper around client.models.generate_content(). Returns
-    the response text, or raises on any SDK failure (callers catch this)."""
+    the response text, or raises on any SDK failure (callers catch this and
+    should route it through _record_error so the failure is diagnosable)."""
     from google.genai import types
     client = _get_client()
     config_kwargs = {"thinking_config": types.ThinkingConfig(thinking_level=thinking_level)}
@@ -82,6 +151,7 @@ def _generate(model: str, prompt: str, *, json_mode: bool = False, thinking_leve
         contents=prompt,
         config=types.GenerateContentConfig(**config_kwargs),
     )
+    clear_last_error()
     return response.text
 
 
@@ -122,12 +192,14 @@ def chat_reply(patient_name: str, history: list[dict]) -> dict:
 
     Returns: {"reply": str, "suggestions": [str, ...]}
     """
-    fallback = {
-        "reply": "I'm having trouble connecting right now — could you tell me a bit more about your symptoms?",
-        "suggestions": ["It started today", "It's been a few days", "I'm not sure"],
-    }
+    def _fallback(detail: Optional[str] = None) -> dict:
+        msg = "⚠️ I'm unable to reach the AI assistant right now"
+        msg += f" ({detail})." if detail else "."
+        msg += " Please tell the front desk, or try again in a moment."
+        return {"reply": msg, "suggestions": ["Try again"]}
+
     if not _client_ready():
-        return fallback
+        return _fallback("no Gemini API key is configured")
 
     try:
         transcript = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in history)
@@ -177,13 +249,13 @@ Respond with ONLY a JSON object, no markdown fences:
         text = _generate(FLASH_MODEL, prompt, json_mode=True, thinking_level="low")
         parsed = _extract_json(text)
         if not parsed:
-            return fallback
+            return _fallback("the AI's response couldn't be parsed")
         return {
-            "reply": parsed.get("reply", fallback["reply"]),
+            "reply": parsed.get("reply") or _fallback()["reply"],
             "suggestions": parsed.get("suggestions", [])[:3],
         }
-    except Exception:
-        return fallback
+    except Exception as exc:
+        return _fallback(_record_error(exc))
 
 
 # --------------------------------------------------------------------------
@@ -221,7 +293,7 @@ Respond with ONLY a JSON object, no markdown fences:
         text = _generate(PRO_MODEL, prompt, json_mode=True, thinking_level="high")
         parsed = _extract_json(text)
         if not parsed:
-            return fallback
+            return {**fallback, "reasoning": "AI response couldn't be parsed."}
         severity = parsed.get("severity", "casual")
         if severity not in ("severe", "casual"):
             severity = "casual"
@@ -230,8 +302,8 @@ Respond with ONLY a JSON object, no markdown fences:
             "specialization": parsed.get("specialization", "General Physician"),
             "reasoning": parsed.get("reasoning", ""),
         }
-    except Exception:
-        return fallback
+    except Exception as exc:
+        return {**fallback, "reasoning": _record_error(exc)}
 
 
 # --------------------------------------------------------------------------
@@ -252,7 +324,7 @@ Conversation:
         text = _generate(FLASH_MODEL, prompt, thinking_level="low")
         return (text or "").strip() or "No summary generated."
     except Exception as exc:
-        return f"Summary unavailable ({exc})."
+        return f"Summary unavailable ({_record_error(exc)})."
 
 
 # --------------------------------------------------------------------------
@@ -308,5 +380,5 @@ Respond with ONLY a JSON object, no markdown fences:
             ),
         }
     except Exception as exc:
-        fallback["disclaimer"] = f"AI prescription generation failed ({exc})."
+        fallback["disclaimer"] = f"AI prescription generation failed ({_record_error(exc)})."
         return fallback

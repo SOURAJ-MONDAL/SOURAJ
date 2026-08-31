@@ -324,15 +324,19 @@ def hospital_affiliations_editor(
 
 
 def get_api_key() -> Optional[str]:
-    """Resolve the Gemini API key from Streamlit secrets or environment."""
+    """Resolve the Gemini API key: a key pasted into the sidebar this
+    session takes priority (lets you fix a bad/missing key without editing
+    files), then Streamlit secrets, then the environment."""
     try:
         import streamlit as st
+        session_key = st.session_state.get("gemini_api_key_override")
+        if session_key:
+            return session_key
         if "GOOGLE_API_KEY" in st.secrets:
             return st.secrets["GOOGLE_API_KEY"]
     except Exception:
         pass
     return os.environ.get("GOOGLE_API_KEY")
-
 
 # --------------------------------------------------------------------------
 # Client-side "digits only" enforcement

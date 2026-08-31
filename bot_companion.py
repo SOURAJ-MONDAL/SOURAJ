@@ -118,18 +118,37 @@ _COMPANION_CSS = """
 }
 
 .mk-bot-wrap {
-    position: fixed;
-    right: 22px;
-    bottom: 108px;
-    z-index: 999999;
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    z-index: 50;
     pointer-events: none;
     font-family: 'Inter', sans-serif;
 }
 .mk-bot-figure {
-    width: 78px;
-    height: 90px;
+    width: 64px;
+    height: 74px;
     animation: mk-bot-bob 2.6s ease-in-out infinite;
     filter: drop-shadow(0 4px 8px rgba(15, 92, 92, 0.18));
+}
+
+/* ---------- Anchoring the companion to its enclosing chat area ----------
+   `.mk-bot-wrap` above is `position: absolute`, which positions it relative
+   to the nearest *positioned* ancestor. Streamlit's own containers are
+   `position: static` by default, so without help the companion would just
+   fall back to the page. `anchor_companion_to_container()` drops an
+   invisible `.mk-chat-companion-anchor` marker as the first element inside
+   the desired container; whichever Streamlit block div ends up holding
+   that marker gets promoted to `position: relative` here, which turns it
+   into the positioning context — so a companion rendered anywhere inside
+   that same container docks to *that container's* bottom-right corner
+   instead of the browser window's. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] div.mk-chat-companion-anchor),
+div[data-testid="stVerticalBlockBorderWrapper"]:has(div.mk-chat-companion-anchor) {
+    position: relative;
+}
+.mk-chat-companion-anchor {
+    display: none;
 }
 .mk-bot-figure.mk-bot-anim-bob-slow      { animation-name: mk-bot-bob-slow; }
 .mk-bot-figure.mk-bot-anim-bob-fast      { animation-name: mk-bot-bob-fast; }
@@ -174,6 +193,19 @@ def inject_companion_css() -> None:
     if not st.session_state.get("_mk_companion_css_injected"):
         st.markdown(_COMPANION_CSS, unsafe_allow_html=True)
         st.session_state["_mk_companion_css_injected"] = True
+
+
+def anchor_companion_to_container() -> None:
+    """Call this once, as the very first thing inside the container you
+    want the companion docked to (e.g. the patient AI chat area) — before
+    the `st.empty()` placeholder you pass to `render_companion()`.
+
+    It makes that enclosing container the companion's positioning context,
+    so the figurine sits in the bottom-right corner of *that container*
+    instead of floating over the whole page. Safe to call multiple times.
+    """
+    inject_companion_css()  # cheap no-op after the first call each session
+    st.markdown('<div class="mk-chat-companion-anchor"></div>', unsafe_allow_html=True)
 
 
 def _mouth_path(state: str) -> str:

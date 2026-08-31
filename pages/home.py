@@ -4,7 +4,7 @@ import streamlit as st
 
 import db
 from ai_helper import assess_severity, chat_reply, generate_prescription, generate_summary, opening_message
-from bot_companion import render_companion
+from bot_companion import anchor_companion_to_container, render_companion
 from styles import badge, page_header, vitals_strip
 from utils import format_schedule_slots, pretty_datetime
 
@@ -59,17 +59,21 @@ if user_type == "patient":
             st.session_state.active_chat_session_id = None
             st.rerun()
 
-        companion_slot = st.empty()  # the animated AI companion figurine lives here
+        chat_area = st.container()  # wraps the chat box + companion so the
+        # companion can be anchored to *this* area's own corner (see below)
+        with chat_area:
+            anchor_companion_to_container()
+            companion_slot = st.empty()  # the animated AI companion figurine lives here
 
-        chat_box = st.container(height=420)
-        with chat_box:
-            for m in messages:
-                css_class = "mk-chat-patient" if m["role"] == "user" else "mk-chat-doc"
-                label = "You" if m["role"] == "user" else "MediKiosk Assistant"
-                chat_box.markdown(
-                    f'<div class="{css_class}"><b>{label}:</b><br/>{m["content"]}</div>',
-                    unsafe_allow_html=True,
-                )
+            chat_box = st.container(height=420)
+            with chat_box:
+                for m in messages:
+                    css_class = "mk-chat-patient" if m["role"] == "user" else "mk-chat-doc"
+                    label = "You" if m["role"] == "user" else "MediKiosk Assistant"
+                    chat_box.markdown(
+                        f'<div class="{css_class}"><b>{label}:</b><br/>{m["content"]}</div>',
+                        unsafe_allow_html=True,
+                    )
 
         patient_turns = sum(1 for m in messages if m["role"] == "user")
         is_closed = session["status"] == "closed"

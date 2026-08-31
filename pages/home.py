@@ -3,7 +3,7 @@ import json
 import streamlit as st
 
 import db
-from ai_helper import assess_severity, chat_reply, generate_prescription, generate_summary, opening_message
+from ai_helper import assess_severity, chat_reply, generate_prescription, generate_summary, get_status, opening_message
 from bot_companion import render_companion
 from styles import badge, page_header, vitals_strip
 from utils import format_schedule_slots, pretty_datetime
@@ -22,6 +22,14 @@ if user_type == "patient":
     MIN_TURNS_BEFORE_ASSESSMENT = 5  # patient messages, per spec ("after 5+ turns")
 
     page_header("AI CHAT", f"Hello, {patient['name']}", "Chat with the AI assistant to get triaged.")
+
+    ai_status = get_status()
+    if not ai_status["connected"]:
+        st.warning(
+            f"⚠️ The AI assistant isn't connected right now ({ai_status['detail']}). "
+            "You can still start a chat, but replies will show a connection notice instead "
+            "of real triage — fix this in the sidebar under 'Set Gemini API key'.",
+        )
 
     if st.session_state.active_chat_session_id is None:
         render_companion(st.empty(), "sleepy")

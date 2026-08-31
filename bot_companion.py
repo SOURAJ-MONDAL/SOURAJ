@@ -121,7 +121,7 @@ def companion_html(state: str = "idle") -> str:
     no_blink = state in ("sleepy", "surprised")
     blink_css = "animation: none;" if no_blink else ""
 
-    return f"""
+    html = f"""
 <style>
 @keyframes mk-bot-bob {{
     0%, 100% {{ transform: translateY(0px); }}
@@ -209,7 +209,7 @@ def companion_html(state: str = "idle") -> str:
     transform-box: fill-box;
     transform-origin: center;
 }}
-.mk-bot-brow {{ stroke: var(--mk-coral, #D64545); stroke-width: 3; stroke-linecap: round; }}
+.mk-bot-brow {{ stroke: #D64545; stroke-width: 3; stroke-linecap: round; }}
 .mk-bot-brow-up {{ stroke: {glow}; stroke-width: 3; stroke-linecap: round; }}
 .mk-bot-cheek {{ fill: #F6B8C4; opacity: 0.75; }}
 .mk-bot-dot {{ animation: mk-bot-dot-pulse 1.2s ease-in-out infinite; }}
@@ -235,6 +235,12 @@ def companion_html(state: str = "idle") -> str:
   </svg>
 </div>
 """
+    # Some state placeholders (blink_css, mouth_extra_anim, extras) can be
+    # empty for certain states, leaving whitespace-only lines behind. A
+    # blank line followed by an indented (4+ space) line makes Streamlit's
+    # markdown renderer treat that line as a literal code block instead of
+    # HTML/SVG markup — so strip any whitespace-only lines before returning.
+    return "\n".join(line for line in html.split("\n") if line.strip() != "")
 
 
 def render_companion(placeholder, state: str = "idle") -> None:

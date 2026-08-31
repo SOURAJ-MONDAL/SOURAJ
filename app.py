@@ -9,6 +9,7 @@ the nav change depending on whether a doctor / patient is logged in.
 
 import streamlit as st
 
+import ai_helper
 from db import init_db
 from styles import inject_base_css
 
@@ -66,6 +67,28 @@ with st.sidebar:
             logout()
     else:
         st.caption("Not signed in")
+
+    st.markdown("<hr class='mk-divider'/>", unsafe_allow_html=True)
+
+    # --- AI connection status (per build guide Part E) -------------------
+    # Surfacing this is what actually lets you tell "the AI is misconfigured"
+    # apart from "the AI replied badly" — without it, every failure just
+    # looks like the chatbot ignoring the patient.
+    status = ai_helper.get_status()
+    if status["connected"]:
+        st.success("✅ AI Connected", icon="✅")
+    else:
+        st.error(f"❌ AI not connected\n\n{status['detail']}", icon="❌")
+        with st.expander("Set Gemini API key"):
+            key_input = st.text_input(
+                "Gemini API key", type="password",
+                value=st.session_state.get("gemini_api_key_override", ""),
+                help="Get a free key at ai.google.dev. This overrides secrets.toml for this session only.",
+            )
+            if st.button("Save key", use_container_width=True):
+                st.session_state["gemini_api_key_override"] = key_input.strip()
+                ai_helper.clear_last_error()
+                st.rerun()
 
 # --------------------------------------------------------------------------
 # Navigation — page list adapts to login state

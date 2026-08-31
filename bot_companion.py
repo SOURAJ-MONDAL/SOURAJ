@@ -117,38 +117,33 @@ _COMPANION_CSS = """
     50% { opacity: 1; }
 }
 
+/* `!important` on both the wrapper's box model AND the svg's own size is
+   deliberate: Streamlit applies its own default sizing rules to SVGs and
+   divs rendered inside `st.markdown(unsafe_allow_html=True)` (e.g. making
+   embedded SVGs stretch to fill their container, for responsive diagrams).
+   Without overriding that explicitly, the companion would inherit whatever
+   width the *page* gives it — which is exactly what made it balloon to a
+   huge size once it was rendered inside the (wider) active chat view. Fixed
+   `position` + `!important` sizing makes the companion's on-screen footprint
+   completely independent of where in the page it happens to be rendered. */
 .mk-bot-wrap {
-    position: absolute;
-    right: 14px;
-    bottom: 14px;
-    z-index: 50;
+    position: fixed !important;
+    right: 22px !important;
+    bottom: 108px !important;
+    left: auto !important;
+    top: auto !important;
+    width: 78px !important;
+    height: 90px !important;
+    z-index: 999999 !important;
     pointer-events: none;
     font-family: 'Inter', sans-serif;
 }
 .mk-bot-figure {
-    width: 64px;
-    height: 74px;
+    width: 78px !important;
+    height: 90px !important;
+    max-width: 78px !important;
     animation: mk-bot-bob 2.6s ease-in-out infinite;
     filter: drop-shadow(0 4px 8px rgba(15, 92, 92, 0.18));
-}
-
-/* ---------- Anchoring the companion to its enclosing chat area ----------
-   `.mk-bot-wrap` above is `position: absolute`, which positions it relative
-   to the nearest *positioned* ancestor. Streamlit's own containers are
-   `position: static` by default, so without help the companion would just
-   fall back to the page. `anchor_companion_to_container()` drops an
-   invisible `.mk-chat-companion-anchor` marker as the first element inside
-   the desired container; whichever Streamlit block div ends up holding
-   that marker gets promoted to `position: relative` here, which turns it
-   into the positioning context — so a companion rendered anywhere inside
-   that same container docks to *that container's* bottom-right corner
-   instead of the browser window's. */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] div.mk-chat-companion-anchor),
-div[data-testid="stVerticalBlockBorderWrapper"]:has(div.mk-chat-companion-anchor) {
-    position: relative;
-}
-.mk-chat-companion-anchor {
-    display: none;
 }
 .mk-bot-figure.mk-bot-anim-bob-slow      { animation-name: mk-bot-bob-slow; }
 .mk-bot-figure.mk-bot-anim-bob-fast      { animation-name: mk-bot-bob-fast; }
@@ -196,16 +191,23 @@ def inject_companion_css() -> None:
 
 
 def anchor_companion_to_container() -> None:
-    """Call this once, as the very first thing inside the container you
-    want the companion docked to (e.g. the patient AI chat area) — before
-    the `st.empty()` placeholder you pass to `render_companion()`.
+    """No-op, kept only so existing call sites don't break.
 
-    It makes that enclosing container the companion's positioning context,
-    so the figurine sits in the bottom-right corner of *that container*
-    instead of floating over the whole page. Safe to call multiple times.
+    An earlier version of this file tried to dock the companion to the
+    bottom-right corner of *whichever specific container* it was rendered
+    in (e.g. just the chat box), using `position: absolute` plus a CSS
+    `:has()` trick. That fought with Streamlit's own default sizing rules
+    for SVGs/divs embedded via `st.markdown(unsafe_allow_html=True)`
+    (which stretch to fill their container for responsive diagrams) and
+    made the companion balloon to a huge size once it was rendered inside
+    the wider active-chat layout.
+
+    `.mk-bot-wrap` is back to a simple `position: fixed` bottom-right badge
+    (see `_COMPANION_CSS`) with `!important` sizing, so it's always the
+    same small size in the same corner of the *screen*, regardless of
+    which container in the page it's called from.
     """
     inject_companion_css()  # cheap no-op after the first call each session
-    st.markdown('<div class="mk-chat-companion-anchor"></div>', unsafe_allow_html=True)
 
 
 def _mouth_path(state: str) -> str:
@@ -289,7 +291,18 @@ def companion_html(state: str = "idle") -> str:
     """The small, per-rerun dynamic fragment: just the wrapper div + SVG.
     All CSS (keyframes, layout, positioning) lives in `_COMPANION_CSS`,
     injected once via `inject_companion_css()` — this function never
-    touches a `<style>` tag, keeping the per-turn HTML small and simple."""
+    touches a `<style>` tag, keeping the per-turn HTML small and simple.
+
+    Built as ONE single-line string with no leading whitespace on any
+    "line" (there aren't any — see below). Streamlit's markdown renderer
+    still runs `unsafe_allow_html=True` content through a Markdown parser
+    before trusting the HTML, and a 4-space-indented line — especially
+    one immediately following a blank line, which happens here whenever
+    `extras` is "" (idle/listening/talking all have no extra features) —
+    gets misread as an *indented code block* and dumped onto the page as
+    literal escaped text instead of being rendered as HTML. Keeping the
+    whole fragment on a single line with zero indentation sidesteps that
+    entirely, regardless of which state's markup is empty."""
     state = state if state in STATE_GLOW else "idle"
     glow = STATE_GLOW[state]
     mouth_d = _mouth_path(state)
@@ -299,17 +312,19 @@ def companion_html(state: str = "idle") -> str:
     body_anim_cls = _BODY_ANIM_CLASS.get(state, "")
     mouth_cls = " mk-bot-talking" if state == "talking" else ""
 
-    return f"""<div class="mk-bot-wrap" style="color:{glow};">
-  <svg class="mk-bot-figure {body_anim_cls}" viewBox="0 0 120 140" xmlns="http://www.w3.org/2000/svg">
-    <line x1="60" y1="8" x2="60" y2="24" stroke="{glow}" stroke-width="3" />
-    <circle class="mk-bot-antenna-tip" cx="60" cy="8" r="7" fill="{glow}" />
-    <rect x="14" y="24" width="92" height="86" rx="26" fill="#FBFAF7" stroke="{glow}" stroke-width="3" />
-    {eyes}
-    <path class="mk-bot-mouth{mouth_cls}" d="{mouth_d}" stroke="{glow}" stroke-width="4" fill="none" stroke-linecap="round" />
-    {extras}
-    <rect x="10" y="112" width="100" height="8" rx="4" fill="{glow}" opacity="0.18" />
-  </svg>
-</div>"""
+    return (
+        f'<div class="mk-bot-wrap" style="color:{glow};">'
+        f'<svg class="mk-bot-figure {body_anim_cls}" viewBox="0 0 120 140" xmlns="http://www.w3.org/2000/svg">'
+        f'<line x1="60" y1="8" x2="60" y2="24" stroke="{glow}" stroke-width="3" />'
+        f'<circle class="mk-bot-antenna-tip" cx="60" cy="8" r="7" fill="{glow}" />'
+        f'<rect x="14" y="24" width="92" height="86" rx="26" fill="#FBFAF7" stroke="{glow}" stroke-width="3" />'
+        f'{eyes}'
+        f'<path class="mk-bot-mouth{mouth_cls}" d="{mouth_d}" stroke="{glow}" stroke-width="4" fill="none" stroke-linecap="round" />'
+        f'{extras}'
+        f'<rect x="10" y="112" width="100" height="8" rx="4" fill="{glow}" opacity="0.18" />'
+        f'</svg>'
+        f'</div>'
+    )
 
 
 def render_companion(placeholder, state: str = "idle") -> None:
